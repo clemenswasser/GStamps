@@ -113,6 +113,9 @@ struct IncrementalSearch {
         const size_t high((size_t)state.range+1u);
         auto visit_one = [&](const size_t a) {
             basis.push_back(bint(a));
+            const size_t required((h+1u)*((h*a+64u)/64u));
+            if (stack[depth+1u].bits.capacity() < required)
+                stack[depth+1u].bits.reserve(required);
             IncrementalExtend(state, a, stack[depth+1u]);
             visit(depth+1u, basis);
             basis.pop_back();
