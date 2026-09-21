@@ -5,6 +5,32 @@
 #include <gstamps.h>
 #include <chrono>
 #include <iostream>
+#include <string>
+
+struct IncrementalOptions {
+    bool automatic = false;
+    bool bound = false;
+    bool descending = false;
+    bool seed = false;
+    bool seed_approx = false;
+    bool target_filter = false;
+    bool final_fast = false;
+    size_t target_count = 1;
+};
+
+inline IncrementalOptions IncrementalAutomaticOptions(const size_t k,
+                                                      const size_t h) {
+    IncrementalOptions options;
+    options.automatic = true;
+    options.bound = true;
+    options.descending = true;
+    options.seed = (k >= 4u);
+    options.seed_approx = true;
+    options.target_filter = (k >= 4u);
+    options.final_fast = (k >= 4u);
+    options.target_count = (h == 4u) ? 4u : 1u;
+    return options;
+}
 
 struct IncrementalState {
     size_t h = 0;
@@ -212,6 +238,7 @@ struct IncrementalSearch {
     bool target_filter;
     bool final_fast;
     size_t target_count;
+    bool automatic;
     bint best = 0;
     std::vector<bint> best_basis;
     unsigned long long states = 0;
@@ -280,25 +307,35 @@ struct IncrementalSearch {
 int main(int argc, char** argv) {
     if (argc <= 2) {
         std::cerr << "usage: " << argv[0]
-                  << " #k #h [bound] [descending] [seed] [target-filter] [final-fast] [target-count].\n";
+                  << " #k #h [auto|bound] [descending] [seed]"
+                  << " [target-filter] [final-fast] [target-count].\n"
+                  << "without optional arguments, automatic exact settings are used.\n";
         return 1;
     }
     const size_t k(std::stoul(argv[1]));
     const size_t h(std::stoul(argv[2]));
-    const bool bound(argc>3 ? std::stoi(argv[3])!=0 : false);
-    const bool descending(argc>4 ? std::stoi(argv[4])!=0 : false);
-    const bool seed(argc>5 ? std::stoi(argv[5])!=0 : false);
-    const bool target_filter(argc>6 ? std::stoi(argv[6])!=0 : false);
-    const bool final_fast(argc>7 ? std::stoi(argv[7])!=0 : false);
-    const size_t target_count(argc>8 ? std::stoul(argv[8]) : 1u);
+    IncrementalOptions options;
+    if (argc <= 3 || std::string(argv[3]) == "auto") {
+        options = IncrementalAutomaticOptions(k, h);
+    } else {
+        options.automatic = false;
+        options.bound = std::stoi(argv[3]) != 0;
+        options.descending = argc>4 ? std::stoi(argv[4])!=0 : false;
+        options.seed = argc>5 ? std::stoi(argv[5])!=0 : false;
+        options.target_filter = argc>6 ? std::stoi(argv[6])!=0 : false;
+        options.final_fast = argc>7 ? std::stoi(argv[7])!=0 : false;
+        options.target_count = argc>8 ? std::stoul(argv[8]) : 1u;
+    }
 
-    IncrementalSearch search{k,h,bound,descending,target_filter,final_fast,target_count};
+    IncrementalSearch search{k,h,options.bound,options.descending,
+                             options.target_filter,options.final_fast,
+                             options.target_count,options.automatic};
     search.stack.resize(k);
     search.stack[0] = IncrementalInitial(h);
     std::vector<bint> basis{1};
-    if (seed) {
+    if (options.seed) {
         std::vector<bint> seed_basis;
-        search.best = FSelect(seed_basis, k, h, 0, false, 0);
+        search.best = FSelect(seed_basis, k, h, 0, options.seed_approx, 0);
         search.best_basis = seed_basis;
     }
     const auto start(std::chrono::steady_clock::now());
@@ -306,6 +343,7 @@ int main(int argc, char** argv) {
     const auto stop(std::chrono::steady_clock::now());
 
     std::cout << "#[Incremental] range: " << search.best
+              << " policy: " << (options.automatic ? "auto" : "manual")
               << " states: " << search.states
               << " target-skips: " << search.target_skips
               << " seconds: "
