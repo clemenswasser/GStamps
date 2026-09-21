@@ -257,16 +257,29 @@ inline bint _BRange(const List& points, const size_t k, const stype_t s,
     const size_t nwords((upper+63u)/64u);
     const size_t nvec4((nwords+3u)/4u);
     const size_t nwords4(nvec4*4u);
-    std::vector<uint64_t> cur(nwords4, 0u), nxt(nwords4, 0u);
-    cur[0] = 1ULL;
+    // A1: SBO -- brute prefixes are tiny (upper~200 bits = 4 words);
+    // two heap vectors per Range (~100ns malloc/free each) dominate.
+    // Keep bitsets on stack up to 64 words (512B x2 = 1KB).
+    constexpr size_t SBO_WORDS = 64u;
+    std::vector<uint64_t> curH, nxtH;
+    uint64_t curS[SBO_WORDS], nxtS[SBO_WORDS];
+    const bool heap(nwords4 > SBO_WORDS);
+    uint64_t *cbuf(heap ? nullptr : curS);
+    uint64_t *nbuf(heap ? nullptr : nxtS);
+    if (heap) {
+        curH.assign(nwords4, 0u); nxtH.assign(nwords4, 0u);
+        cbuf = curH.data(); nbuf = nxtH.data();
+    } else {
+        for(size_t i=0; i<nwords4; ++i) cbuf[i] = 0u;
+    }
+    cbuf[0] = 1ULL;
     for(size_t j=0; j<k; ++j) {
         const size_t v((size_t)points[j]);
-        if (v < upper) cur[v>>6] |= (1ULL<<(v&63u));
+        if (v < upper) cbuf[v>>6] |= (1ULL<<(v&63u));
     }
+    uint64_t* __restrict__ cp(cbuf);
+    uint64_t* __restrict__ np(nbuf);
     for(size_t d=1; d<us; ++d) {
-        // nxt = cur (streaming copy, then OR shifted versions)
-        uint64_t* __restrict__ cp(cur.data());
-        uint64_t* __restrict__ np(nxt.data());
         std::copy(cp, cp+nwords4, np);
         // Early depths are sparse: skip zero words (scalar, predictable).
         // Later depths are dense: AVX2 streaming (no branches).
@@ -324,10 +337,10 @@ inline bint _BRange(const List& points, const size_t k, const stype_t s,
                     np[i] |= (cp[i-ws]<<bs) | (cp[i-ws-1u]>>rbs);
             }
         }
-        cur.swap(nxt); // O(1) pointer swap; next iter re-derives cp/np
+        std::swap(cp, np); // raw storage is fixed (stack or heap vectors)
     }
     // Find first zero bit = range+1
-    const uint64_t* bits(cur.data());
+    const uint64_t* bits(cp);
     for(size_t i=0; i<upper; ++i) {
         if ( ((bits[i>>6] >> (i&63u)) & 1ULL) == 0ULL ) return (bint)i - 1;
     }
