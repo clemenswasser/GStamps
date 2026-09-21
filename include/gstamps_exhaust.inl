@@ -17,7 +17,7 @@ inline bint FixedPoints(List& pmax, const List& points,
                         const stype_t s, const size_t i, const int verbose) {
     pmax.resize(i); pmax.reserve(points.size());
     for(auto it=points.begin()+i; it!=points.end(); ) {
-        pmax.push_back( _KRange(points, ++it-points.begin(), s, verbose) );
+        pmax.push_back( KDispatch(points, ++it-points.begin(), s, verbose) );
     }
     return pmax.back();
 }
@@ -88,7 +88,7 @@ inline bint complement(std::vector<bint>& prescribed,
     assert(prescribed.size()>=1);
     assert(prescribed.size()<=k);
 
-    bint bmax(_KRange(prescribed,s,verbose));
+    bint bmax(Range(prescribed,s,verbose));
     const bint pc(bmax+__St_One);
     const bint amx( __GSTAMPS_AMX(prescribed.back(), bmax) );
     if ( (prescribed.size()>=k) || (amx>pc) ) return bmax;
@@ -166,7 +166,7 @@ inline bint par_complement(std::vector<bint>& prescribed,
     assert(prescribed.size()>=1);
     assert(prescribed.size()<k);
 
-    bint bmax(_KRange(prescribed,s,verbose));
+    bint bmax(Range(prescribed,s,verbose));
     const bint pc(bmax + __St_One);
     const bint amx( __GSTAMPS_AMX(prescribed.back(), pc) );
 
