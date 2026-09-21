@@ -28,6 +28,25 @@ inline bint IncrementalFirstZero(const uint64_t* bits, const size_t upper) {
     return bint(upper);
 }
 
+inline bint IncrementalFirstZeroFrom(const uint64_t* bits, const size_t upper,
+                                     const size_t start) {
+    if (start >= upper) return bint(upper);
+    size_t word(start >> 6);
+    const size_t full(upper >> 6);
+    uint64_t mask(~0ULL << (start & 63u));
+    for (; word<full; ++word, mask=~0ULL) {
+        const uint64_t inv((~bits[word]) & mask);
+        if (inv) return bint(word*64u + __builtin_ctzll(inv));
+    }
+    const unsigned rem((unsigned)(upper & 63u));
+    if (rem && word==full) {
+        const uint64_t valid(~0ULL >> (64u-rem));
+        const uint64_t inv((~bits[full]) & mask & valid);
+        if (inv) return bint(full*64u + __builtin_ctzll(inv));
+    }
+    return bint(upper);
+}
+
 inline void IncrementalResize(IncrementalState& state, const size_t h,
                               const size_t max_value) {
     state.h = h;
@@ -72,8 +91,10 @@ inline void IncrementalExtend(const IncrementalState& parent, const size_t a,
             destination[i] |= shifted;
         }
     }
-    child.range = IncrementalFirstZero(child.bits.data()+parent.h*child.words,
-                                       child.max_value+1u) - 1;
+    child.range = IncrementalFirstZeroFrom(
+        child.bits.data()+parent.h*child.words,
+        child.max_value+1u,
+        (size_t)parent.range+1u) - 1;
 }
 
 inline bint IncrementalCompletionBound(const bint range, const size_t remaining,
