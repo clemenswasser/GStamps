@@ -82,7 +82,8 @@ Daniel S. Roche
 `bin/incremental #k #h` automatically selects the validated exact search
 policy for the requested parameters. For h=4 this enables the completion
 bound, descending candidates, an approximate lower-bound seed, exact final
-target filtering, final-row evaluation, and four consecutive target checks.
+target filtering, final-row evaluation, four consecutive target checks, and
+the exact two-final-denomination feasibility filter for k>=6.
 The optional numeric arguments remain available for ablation and reproducible
 comparisons:
 

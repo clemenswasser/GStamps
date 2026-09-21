@@ -16,6 +16,7 @@ struct IncrementalOptions {
     bool target_filter = false;
     bool final_fast = false;
     size_t target_count = 1;
+    bool pair_filter = false;
 };
 
 inline IncrementalOptions IncrementalAutomaticOptions(const size_t k,
@@ -29,6 +30,7 @@ inline IncrementalOptions IncrementalAutomaticOptions(const size_t k,
     options.target_filter = (k >= 4u);
     options.final_fast = (k >= 4u);
     options.target_count = (h == 4u) ? 4u : 1u;
+    options.pair_filter = (h == 4u && k >= 6u);
     return options;
 }
 
@@ -239,6 +241,7 @@ struct IncrementalSearch {
     bool final_fast;
     size_t target_count;
     bool automatic;
+    bool pair_filter;
     bint best = 0;
     std::vector<bint> best_basis;
     unsigned long long states = 0;
@@ -288,6 +291,22 @@ struct IncrementalSearch {
             if (stack[depth+1u].bits.capacity() < required)
                 stack[depth+1u].bits.reserve(required);
             IncrementalExtend(state, a, stack[depth+1u]);
+            if (pair_filter && target_filter && basis.size()+1u==k-1u &&
+                best>state.range) {
+                const IncrementalState& pair_prefix(stack[depth+1u]);
+                const size_t pair_target((size_t)best+1u);
+                const size_t pair_low(a+1u);
+                const size_t pair_high((size_t)pair_prefix.range+1u);
+                bool possible=false;
+                for (size_t b=pair_low; b<=pair_high && !possible; ++b)
+                    possible=IncrementalCanReachTargetsWithLast(
+                        pair_prefix,b,pair_target,target_count);
+                if (!possible) {
+                    ++target_skips;
+                    basis.pop_back();
+                    return;
+                }
+            }
             visit(depth+1u, basis);
             basis.pop_back();
         };
@@ -326,10 +345,12 @@ int main(int argc, char** argv) {
         options.final_fast = argc>7 ? std::stoi(argv[7])!=0 : false;
         options.target_count = argc>8 ? std::stoul(argv[8]) : 1u;
     }
+    const bool pair_filter(argc>9 ? std::stoi(argv[9])!=0 : false);
 
     IncrementalSearch search{k,h,options.bound,options.descending,
                              options.target_filter,options.final_fast,
-                             options.target_count,options.automatic};
+                             options.target_count,options.automatic,
+                             options.pair_filter || pair_filter};
     search.stack.resize(k);
     search.stack[0] = IncrementalInitial(h);
     std::vector<bint> basis{1};
