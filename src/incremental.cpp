@@ -165,6 +165,18 @@ inline bool IncrementalCanReachTargetWithLast(const IncrementalState& prefix,
     return false;
 }
 
+inline bool IncrementalCanReachTargetsWithLast(const IncrementalState& prefix,
+                                               const size_t a,
+                                               const size_t first_target,
+                                               const size_t target_count) {
+    for (size_t offset=0; offset<target_count; ++offset) {
+        if (!IncrementalCanReachTargetWithLast(prefix, a,
+                                               first_target+offset))
+            return false;
+    }
+    return true;
+}
+
 inline bint IncrementalFinalRange(const IncrementalState& prefix,
                                   const size_t a,
                                   std::vector<uint64_t>& scratch) {
@@ -199,6 +211,7 @@ struct IncrementalSearch {
     bool descending;
     bool target_filter;
     bool final_fast;
+    size_t target_count;
     bint best = 0;
     std::vector<bint> best_basis;
     unsigned long long states = 0;
@@ -228,7 +241,8 @@ struct IncrementalSearch {
         const size_t target(final_filter ? (size_t)best+1u : 0u);
         auto visit_one = [&](const size_t a) {
             if (final_filter &&
-                !IncrementalCanReachTargetWithLast(state, a, target)) {
+                !IncrementalCanReachTargetsWithLast(state, a, target,
+                                                    target_count)) {
                 ++target_skips;
                 return;
             }
@@ -266,7 +280,7 @@ struct IncrementalSearch {
 int main(int argc, char** argv) {
     if (argc <= 2) {
         std::cerr << "usage: " << argv[0]
-                  << " #k #h [bound] [descending] [seed] [target-filter] [final-fast].\n";
+                  << " #k #h [bound] [descending] [seed] [target-filter] [final-fast] [target-count].\n";
         return 1;
     }
     const size_t k(std::stoul(argv[1]));
@@ -276,8 +290,9 @@ int main(int argc, char** argv) {
     const bool seed(argc>5 ? std::stoi(argv[5])!=0 : false);
     const bool target_filter(argc>6 ? std::stoi(argv[6])!=0 : false);
     const bool final_fast(argc>7 ? std::stoi(argv[7])!=0 : false);
+    const size_t target_count(argc>8 ? std::stoul(argv[8]) : 1u);
 
-    IncrementalSearch search{k,h,bound,descending,target_filter,final_fast};
+    IncrementalSearch search{k,h,bound,descending,target_filter,final_fast,target_count};
     search.stack.resize(k);
     search.stack[0] = IncrementalInitial(h);
     std::vector<bint> basis{1};
