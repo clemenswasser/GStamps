@@ -5,7 +5,7 @@
 #########################################################################
 
 
-OPTFLAGS = -O3 -ffast-math
+OPTFLAGS = -O3 -ggdb3 -ffast-math -march=native -mtune=native
 
 #######
 # g++ options
