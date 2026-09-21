@@ -146,14 +146,35 @@ inline bint IncrementalCompletionBound(const bint range, const size_t remaining,
     return bint(h)*last;
 }
 
+inline bool IncrementalCanReachTargetWithLast(const IncrementalState& prefix,
+                                              const size_t a,
+                                              const size_t target) {
+    if (target <= prefix.max_value &&
+        ((prefix.bits[prefix.h*prefix.words+(target>>6)] >>
+          (target&63u)) & 1u))
+        return true;
+    for (size_t copies=1; copies<=prefix.h; ++copies) {
+        if (copies*a > target) break;
+        const size_t remainder(target-copies*a);
+        const size_t depth(prefix.h-copies);
+        if (remainder > depth*prefix.max_value) continue;
+        if ((prefix.bits[depth*prefix.words+(remainder>>6)] >>
+             (remainder&63u)) & 1u)
+            return true;
+    }
+    return false;
+}
+
 struct IncrementalSearch {
     size_t k;
     size_t h;
     bool bound;
     bool descending;
+    bool target_filter;
     bint best = 0;
     std::vector<bint> best_basis;
     unsigned long long states = 0;
+    unsigned long long target_skips = 0;
     std::vector<IncrementalState> stack;
 
     void visit(const size_t depth, std::vector<bint>& basis) {
@@ -173,7 +194,15 @@ struct IncrementalSearch {
 
         const size_t low((size_t)basis.back()+1u);
         const size_t high((size_t)state.range+1u);
+        const bool final_filter(target_filter && basis.size()+1u==k &&
+                                best>state.range);
+        const size_t target(final_filter ? (size_t)best+1u : 0u);
         auto visit_one = [&](const size_t a) {
+            if (final_filter &&
+                !IncrementalCanReachTargetWithLast(state, a, target)) {
+                ++target_skips;
+                return;
+            }
             basis.push_back(bint(a));
             const size_t required((h+1u)*((h*a+64u)/64u));
             if (stack[depth+1u].bits.capacity() < required)
@@ -198,7 +227,7 @@ struct IncrementalSearch {
 int main(int argc, char** argv) {
     if (argc <= 2) {
         std::cerr << "usage: " << argv[0]
-                  << " #k #h [bound] [descending] [seed].\n";
+                  << " #k #h [bound] [descending] [seed] [target-filter].\n";
         return 1;
     }
     const size_t k(std::stoul(argv[1]));
@@ -206,8 +235,9 @@ int main(int argc, char** argv) {
     const bool bound(argc>3 ? std::stoi(argv[3])!=0 : false);
     const bool descending(argc>4 ? std::stoi(argv[4])!=0 : false);
     const bool seed(argc>5 ? std::stoi(argv[5])!=0 : false);
+    const bool target_filter(argc>6 ? std::stoi(argv[6])!=0 : false);
 
-    IncrementalSearch search{k,h,bound,descending};
+    IncrementalSearch search{k,h,bound,descending,target_filter};
     search.stack.resize(k);
     search.stack[0] = IncrementalInitial(h);
     std::vector<bint> basis{1};
@@ -222,6 +252,7 @@ int main(int argc, char** argv) {
 
     std::cout << "#[Incremental] range: " << search.best
               << " states: " << search.states
+              << " target-skips: " << search.target_skips
               << " seconds: "
               << std::chrono::duration<double>(stop-start).count()
               << " basis: ";
