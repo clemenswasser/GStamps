@@ -256,6 +256,8 @@ inline bint _BRangeTiny(const List& points, const size_t k,
         const size_t a((size_t)points[j]);
         wsA[j] = (a>>6); bsA[j] = (unsigned)(a&63u); rbA[j] = 64u-bsA[j];
     }
+    // K1: pointer-swapped buffers (copy-back loop was 7.6% profile).
+    uint64_t *cp(cur), *np(nxt);
     for(size_t d=1; d<us; ++d) {
         // Fused copy + first denomination (E1 for tiny included here).
         {
@@ -263,19 +265,17 @@ inline bint _BRangeTiny(const List& points, const size_t k,
             if (bs == 0) {
 #pragma GCC unroll 8
                 for(size_t i=0; i<nwords; ++i)
-                    nxt[i] = cur[i] | (i>=ws ? cur[i-ws] : 0u);
+                    np[i] = cp[i] | (i>=ws ? cp[i-ws] : 0u);
             } else {
                 const unsigned rb(rbA[0]);
 #pragma GCC unroll 8
                 for(size_t i=0; i<nwords; ++i) {
                     uint64_t sh(0u);
                     if (i>=ws) {
-                        sh = cur[i-ws]<<bs;
-                        if (i>ws) sh |= (cur[i-ws-1u]>>rb);
-                        else if (ws==0) { /* i==ws>0? no-op */ }
+                        sh = cp[i-ws]<<bs;
+                        if (i>ws) sh |= (cp[i-ws-1u]>>rb);
                     }
-                    // i==ws term cp[0]<<bs needs i-ws==0 -> covered (cur[0]<<bs, no carry since i==ws)
-                    nxt[i] = cur[i] | sh;
+                    np[i] = cp[i] | sh;
                 }
             }
         }
@@ -284,25 +284,25 @@ inline bint _BRangeTiny(const List& points, const size_t k,
             if (ws >= nwords) continue;
             if (bs == 0) {
 #pragma GCC unroll 8
-                for(size_t i=ws; i<nwords; ++i) nxt[i] |= cur[i-ws];
+                for(size_t i=ws; i<nwords; ++i) np[i] |= cp[i-ws];
             } else {
                 const unsigned rb(rbA[j]);
-                if (ws < nwords) nxt[ws] |= (cur[0]<<bs);
+                if (ws < nwords) np[ws] |= (cp[0]<<bs);
 #pragma GCC unroll 8
                 for(size_t i=ws+1u; i<nwords; ++i)
-                    nxt[i] |= (cur[i-ws]<<bs) | (cur[i-ws-1u]>>rb);
+                    np[i] |= (cp[i-ws]<<bs) | (cp[i-ws-1u]>>rb);
             }
         }
-        for(size_t i=0; i<nwords; ++i) cur[i] = nxt[i];
+        { uint64_t* t(cp); cp = np; np = t; }
     }
     const size_t full(upper>>6);
     for(size_t w=0; w<full; ++w) {
-        const uint64_t inv(~cur[w]);
+        const uint64_t inv(~cp[w]);
         if (inv) return (bint)(w*64u + __builtin_ctzll(inv)) - 1;
     }
     const unsigned rem((unsigned)(upper&63u));
     if (rem) {
-        const uint64_t inv(~(cur[full] | (~0ULL << rem)));
+        const uint64_t inv(~(cp[full] | (~0ULL << rem)));
         if (inv) return (bint)(full*64u + __builtin_ctzll(inv)) - 1;
     }
     return (bint)upper - 1;
