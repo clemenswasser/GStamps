@@ -25,6 +25,7 @@ PRG  = range basis
 PRG += dynprg supplement complement
 PRG += brute
 PRG += search
+PRG += incremental
 
 BEN  = fibo alba geom bala
 BEN += krange reach srange

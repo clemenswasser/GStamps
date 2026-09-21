@@ -47,6 +47,7 @@ Daniel S. Roche
 |  |  |
 | :--------- | :------ |
 |`bin/search`| Smallest basis reaching N with s stamps |
+|`bin/incremental`| Exact exhaustive search with incremental prefix reachability |
 |`bin/complement`| Exhausts all additional denominations in parallel |
 |`bin/supplement`| Exhausts additional denominations several values at a time |
 |`bin/brute`| Exhaustive search of an extremal basis |
