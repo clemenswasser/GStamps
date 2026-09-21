@@ -59,17 +59,60 @@ inline bint RecSelect(List& points, const size_t k, const stype_t s,
 
     bint max(0);
     if (rlevel>0) {
-        for(size_t klow(1); klow<k; ++klow) {
-            for(stype_t slow(1); slow<s; ++slow) {
-                std::vector<bint> p2;
-                const bint cm = CutSelect(p2, k, klow, s, slow,
-                                          rlevel-1, approx, verbose-1);
-                if (verbose>0) std::clog << "#[RS] (" << k << '|' << klow << ','
-                                         << size_t(s) << '|' << size_t(slow)
-                                         << "): " << cm << std::endl;
-                if (cm>max) {
-                    points.swap(p2);
-                    max = cm;
+        // Parallel exploration of (klow,slow) cuts. Each CutSelect is
+        // independent (shared memo is now thread-safe). Nested parallelism
+        // is serial by default in OpenMP, so recursion inside stays serial.
+        // Guard tiny problems from parallel overhead.
+        bint global_max(0);
+        std::vector<bint> global_points;
+        size_t best_klow(0), best_slow(0);
+        const bool use_parallel =
+#ifdef _OPENMP
+            ((k>10u) && ((k-1u)*((size_t)s-1u) >= 16u));
+#else
+            false;
+#endif
+        if (use_parallel) {
+#pragma omp parallel for collapse(2) schedule(dynamic) shared(global_max, global_points) default(shared)
+            for(size_t klow=1; klow<k; ++klow) {
+                for(size_t slowi=1; slowi<(size_t)s; ++slowi) {
+                    const stype_t slow((stype_t)slowi);
+                    std::vector<bint> p2;
+                    const bint cm = CutSelect(p2, k, klow, s, slow,
+                                              rlevel-1, approx, verbose-1);
+#pragma omp critical
+                    {
+                        if (verbose>0) std::clog << "#[RS] (" << k << '|'
+                            << klow << ',' << size_t(s) << '|'
+                            << size_t(slow) << "): " << cm << std::endl;
+                        // Deterministic tie-break: smaller (klow,slow) wins,
+                        // independent of thread scheduling order.
+                        if ((cm>global_max) ||
+                            ((cm==global_max) &&
+                             ((klow<best_klow) ||
+                              ((klow==best_klow)&&(slowi<best_slow))))) {
+                            global_points.swap(p2);
+                            global_max = cm;
+                            best_klow = klow; best_slow = slowi;
+                        }
+                    }
+                }
+            }
+            points.swap(global_points);
+            max = global_max;
+        } else {
+            for(size_t klow(1); klow<k; ++klow) {
+                for(stype_t slow(1); slow<s; ++slow) {
+                    std::vector<bint> p2;
+                    const bint cm = CutSelect(p2, k, klow, s, slow,
+                                              rlevel-1, approx, verbose-1);
+                    if (verbose>0) std::clog << "#[RS] (" << k << '|' << klow << ','
+                                             << size_t(s) << '|' << size_t(slow)
+                                             << "): " << cm << std::endl;
+                    if (cm>max) {
+                        points.swap(p2);
+                        max = cm;
+                    }
                 }
             }
         }
@@ -277,7 +320,10 @@ inline bint DSelect(std::vector<bint>& points, const size_t k, const stype_t s,
 
 
 
-// Memoization of solutions
+// Memoization of solutions -- thread-safe for parallel RecSelect.
+// NOTE: key is (k,s) only; callers must use consistent (rlevel,approx) for a
+// given (k,s) within a run (true for search/basis). Mixing approx/exact for
+// the same (k,s) would pollute the cache.
 template<typename stype_t>
 inline bint FSelect(std::vector<bint>& points, const size_t k, const stype_t s,
                     const int rlevel, const bool approx, const int verbose) {
@@ -285,18 +331,33 @@ inline bint FSelect(std::vector<bint>& points, const size_t k, const stype_t s,
     bint max(0);
     static std::map<std::pair<size_t,size_t>,
         std::pair<bint,std::vector<bint>>> memoize;
-    std::pair<size_t,size_t> p(k,s);
-    if (memoize.count(p)>0) {
-        max = memoize[p].first;
-        auto& vec(memoize[p].second);
-        points.assign(vec.begin(),vec.end());
-        if (verbose>0) {
-            ScopePrint(std::clog << "#[FMM] (" << k << ',' << size_t(s) << "):"
-                       << max << ", n: ", points)<<std::endl;
+    static std::mutex memo_mtx;
+    const std::pair<size_t,size_t> p(k,(size_t)s);
+    {
+        std::lock_guard<std::mutex> lk(memo_mtx);
+        auto it(memoize.find(p));
+        if (it != memoize.end()) {
+            max = it->second.first;
+            points.assign(it->second.second.begin(),it->second.second.end());
+            if (verbose>0) {
+                ScopePrint(std::clog << "#[FMM] (" << k << ',' << size_t(s) << "):"
+                           << max << ", n: ", points)<<std::endl;
+            }
+            return max;
         }
-    } else {
-        max = DSelect(points, k, s, rlevel, approx, verbose);
-        memoize[p]=std::pair<size_t,std::vector<bint>>(max,points);
+    }
+    // Miss: compute without holding the lock (allows parallel progress),
+    // then insert (first writer wins; DSelect is deterministic).
+    max = DSelect(points, k, s, rlevel, approx, verbose);
+    {
+        std::lock_guard<std::mutex> lk(memo_mtx);
+        auto it(memoize.find(p));
+        if (it == memoize.end()) {
+            memoize[p]=std::pair<bint,std::vector<bint>>(max,points);
+        } else {
+            max = it->second.first;
+            points.assign(it->second.second.begin(),it->second.second.end());
+        }
     }
 
     return max;

@@ -19,6 +19,11 @@
 #include <set>
 #include <map>
 #include <numeric>
+#include <mutex>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include <boost/dynamic_bitset.hpp>
 
