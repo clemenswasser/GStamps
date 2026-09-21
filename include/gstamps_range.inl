@@ -339,13 +339,25 @@ inline bint _BRange(const List& points, const size_t k, const stype_t s,
         }
         std::swap(cp, np); // raw storage is fixed (stack or heap vectors)
     }
-    // Find first zero bit = range+1
-    const uint64_t* bits(cp);
-    for(size_t i=0; i<upper; ++i) {
-        if ( ((bits[i>>6] >> (i&63u)) & 1ULL) == 0ULL ) return (bint)i - 1;
+    // A3: word-level first-zero scan -- bit-by-bit loop was 22% of
+    // brute profile (shift+and per bit). Scan full words, ctz the rest.
+    {
+        const uint64_t* bits(cp);
+        const size_t full(upper>>6);
+        for(size_t w=0; w<full; ++w) {
+            const uint64_t inv(~bits[w]);
+            if (inv) return (bint)(w*64u + __builtin_ctzll(inv)) - 1;
+        }
+        const unsigned rem((unsigned)(upper&63u));
+        if (rem) {
+            const uint64_t last(bits[full] | (~0ULL << rem));
+            const uint64_t inv(~last);
+            if (inv) return (bint)(full*64u + __builtin_ctzll(inv)) - 1;
+            return (bint)upper - 1;
+        }
+        (void)verbose;
+        return (bint)upper - 1;
     }
-    (void)verbose;
-    return (bint)upper - 1;
 }
 
 template<typename List, typename stype_t>
