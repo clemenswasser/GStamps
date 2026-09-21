@@ -79,6 +79,18 @@ Daniel S. Roche
 - #r: after r recursive levels (rlevel), stops searching for the best cut, just use the midpoint
 - #a: if true provides only a lower bound on the range of the basis (approximate), otherwise computes the range exactly
 
+`bin/incremental #k #h` automatically selects the validated exact search
+policy for the requested parameters. For h=4 this enables the completion
+bound, descending candidates, an approximate lower-bound seed, exact final
+target filtering, final-row evaluation, and four consecutive target checks.
+The optional numeric arguments remain available for ablation and reproducible
+comparisons:
+
+```
+bin/incremental #k #h [bound] [descending] [seed] [target-filter]
+                    [final-fast] [target-count]
+```
+
 **Examples**:
 - `./bin/basis 4 2`: produces a basis of 4 denominations for 2 stamps (1 3 5 6, attaining all integers 1..12)
 - `echo '1 3 5 6' | ./bin/range 2`: the basis can range (all integers up to 12) with 2 stamps
