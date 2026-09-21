@@ -67,9 +67,50 @@ inline IncrementalState IncrementalInitial(const size_t h) {
     return state;
 }
 
+inline void IncrementalShiftOr(uint64_t* destination, const uint64_t* previous,
+                               const size_t words, const size_t a) {
+    const size_t word_shift(a >> 6);
+    if (word_shift >= words) return;
+    const unsigned bit_shift((unsigned)(a & 63u));
+    if (bit_shift == 0) {
+        for (size_t i=word_shift; i<words; ++i)
+            destination[i] |= previous[i-word_shift];
+        return;
+    }
+    const unsigned reverse_shift(64u-bit_shift);
+    destination[word_shift] |= previous[0] << bit_shift;
+    for (size_t i=word_shift+1u; i<words; ++i)
+        destination[i] |= (previous[i-word_shift] << bit_shift) |
+                          (previous[i-word_shift-1u] >> reverse_shift);
+}
+
+inline void IncrementalExtendH4(const IncrementalState& parent,
+                                const size_t a, IncrementalState& child) {
+    IncrementalResize(child, 4u, 4u*a);
+    for (size_t d=0; d<=4u; ++d)
+        std::copy(parent.bits.begin()+d*parent.words,
+                  parent.bits.begin()+d*parent.words+parent.words,
+                  child.bits.begin()+d*child.words);
+    IncrementalShiftOr(child.bits.data()+child.words,
+                       child.bits.data(), child.words, a);
+    IncrementalShiftOr(child.bits.data()+2u*child.words,
+                       child.bits.data()+child.words, child.words, a);
+    IncrementalShiftOr(child.bits.data()+3u*child.words,
+                       child.bits.data()+2u*child.words, child.words, a);
+    IncrementalShiftOr(child.bits.data()+4u*child.words,
+                       child.bits.data()+3u*child.words, child.words, a);
+    child.range = IncrementalFirstZeroFrom(
+        child.bits.data()+4u*child.words, child.max_value+1u,
+        (size_t)parent.range+1u) - 1;
+}
+
 // Add one denomination without recomputing the prefix from scratch.
 inline void IncrementalExtend(const IncrementalState& parent, const size_t a,
                              IncrementalState& child) {
+    if (parent.h == 4u) {
+        IncrementalExtendH4(parent, a, child);
+        return;
+    }
     IncrementalResize(child, parent.h, parent.h*a);
     for (size_t d=0; d<=parent.h; ++d) {
         const size_t copy_words(std::min(parent.words, child.words));
