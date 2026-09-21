@@ -242,6 +242,9 @@ inline bint _BRange(const List& points, const size_t k, const stype_t s,
     if (back == __St_One) return s;
     // Guard: need upper=s*back+1 bits. Fallback for huge/negative.
     if (back <= 0) return _KRange(points, k, s, verbose);
+    // A4: cheap pre-guard -- 128-bit mul was ~300 samples/call hot.
+    // back<=1M and s<=255 implies upper<=255Mb < cap; skip __int128.
+    if (!((back <= bint(1<<20)) && ((size_t)s <= 255u))) {
     // Avoid overflow: use unsigned __int128 for upper check
     {
         unsigned __int128 ub = (unsigned __int128)(uint64_t)s
@@ -250,6 +253,7 @@ inline bint _BRange(const List& points, const size_t k, const stype_t s,
         // streaming passes cost more than _KRange's early-exit scan.
         if (ub > (unsigned __int128)(256u*1024u*1024u))
             return _KRange(points, k, s, verbose);
+    }
     }
     const size_t uback((size_t)back);
     const size_t us((size_t)s);
