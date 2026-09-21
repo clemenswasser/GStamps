@@ -8,6 +8,10 @@
  * GStamps Library, LPSP inline implementations
  ****************************************************************/
 
+#ifdef __AVX2__
+#include <immintrin.h>
+#endif
+
 // ============================================
 // Masking Tools
 // upmask: Round up to the next (highest power of 2, minus 1) of (input+1)
@@ -103,21 +107,33 @@ inline bint _SRange(const Iterator& start, const Iterator& end,
 }
 
 
-// Loop from 1 to n
+// Loop from 1 to n -- data-oriented AoS version (2 bytes/cell when
+// stype_t is uint8_t). Single allocation, raw pointer, size_t loop
+// counters (fixes stype_t wrap for k>255 in the loop condition).
+// For k>255 with 8-bit stype_t the argmin would truncate: use wide path.
+template<typename List, typename stype_t>
+inline bint _KRangeWide(const List& points, const size_t k, const stype_t s,
+                        const int verbose);
 template<typename List, typename stype_t>
 inline bint _KRange(const List& points, const size_t k, const stype_t s,
                     const int verbose) {
     assert( (k>=1) && (k<=points.size()) );
-    const auto& back(points.back());				// k>=1
+    if ((sizeof(stype_t)==1u) && (k>255u))
+        return _KRangeWide(points, k, s, verbose);
+    const bint back(points.back());				// k>=1
     if (back == __St_One) return s;
 
-    const size_t window(upmask(back));	// highest 1-full mask gt
+    const size_t window(upmask((uint64_t)back));	// highest 1-full mask gt
     const stype_t spu(s+1);				// s+1 is unreachable
-    std::vector<std::pair<stype_t,stype_t>> reached(window+1u,
-                                                    std::make_pair(spu,0u));
+    using Cell = std::pair<stype_t,stype_t>;
+    std::vector<Cell> reached(window+1u, std::make_pair(spu,(stype_t)0u));
+    Cell* __restrict__ rp(reached.data());
 
-    for(stype_t i=0; i<k; ++i)
-        reached[points[i]]=std::make_pair(1u,i);
+    for(size_t i=0; i<k; ++i) {
+        const size_t v((size_t)points[i]);
+        rp[v].first = (stype_t)1u;
+        rp[v].second = (stype_t)i;
+    }
 
 #if __GSTAMPS_SELMER_LEMMA > 1
     const auto& penult(points[k-2]); // back>1 => k>=2
@@ -132,15 +148,16 @@ inline bint _KRange(const List& points, const size_t k, const stype_t s,
 #endif
 
     size_t index(1);
-    for(; reached[index & window].first<=s; ++index) {
-        auto& slocal(reached[index & window]);
-        const stype_t slfirst(slocal.first);
+    for(; rp[index & window].first<=s; ++index) {
+        const size_t wcur(index & window);
+        const stype_t slfirst(rp[wcur].first);
         const stype_t vlocal(slfirst+1u);
-        for(auto right=slocal.second; right<k; ++right) {
-            auto& starget(reached[ (index+points[right]) & window]);
-            if (starget.first > vlocal) {
-                starget.first = vlocal;
-                starget.second = right;
+        const size_t rstart((size_t)rp[wcur].second);
+        for(size_t right=rstart; right<k; ++right) {
+            const size_t wt((index+(size_t)points[right]) & window);
+            if (rp[wt].first > vlocal) {
+                rp[wt].first = vlocal;
+                rp[wt].second = (stype_t)right;
             }
         }
 
@@ -150,9 +167,9 @@ inline bint _KRange(const List& points, const size_t k, const stype_t s,
                 // Selmer's lemma
             if ((maxs>mins) && (maxs<s) && (index > selmer[maxs])) {
                     // Find maxs_range
-                for(size_t i=1; i<=back; ++i) {
+                for(size_t i=1; i<=(size_t)back; ++i) {
                         // Complete s_range
-                    if (reached[(index+i) & window].first>maxs) {
+                    if (rp[(index+i) & window].first>maxs) {
                         if (verbose>0) std::clog << "#[ET(" << (size_t)maxs
                                                  << '|' << selmer[maxs] << ")]: "
                                                  << i << " -> "
@@ -165,17 +182,171 @@ inline bint _KRange(const List& points, const size_t k, const stype_t s,
             }
         }
 #endif
-        slocal.first=spu;		// clean up sliding window
+        rp[wcur].first=spu;		// clean up sliding window
     }
 
     return --index;
 
 }
 
+// Wide-argmin fallback for k>255 with 8-bit stype_t (rare): 32-bit index.
+template<typename List, typename stype_t>
+inline bint _KRangeWide(const List& points, const size_t k, const stype_t s,
+                        const int verbose) {
+    assert( (k>=1) && (k<=points.size()) );
+    const bint back(points.back());
+    if (back == __St_One) return s;
+    const size_t window(upmask((uint64_t)back));
+    const stype_t spu(s+1);
+    std::vector<stype_t> best(window+1u, spu);
+    std::vector<uint32_t> arg(window+1u, 0u);
+    stype_t* __restrict__ bestp(best.data());
+    uint32_t* __restrict__ argp(arg.data());
+    for(size_t i=0; i<k; ++i) {
+        const size_t v((size_t)points[i]);
+        bestp[v] = (stype_t)1u;
+        argp[v] = (uint32_t)i;
+    }
+    size_t index(1);
+    for(; bestp[index & window]<=s; ++index) {
+        const size_t wcur(index & window);
+        const stype_t vlocal(bestp[wcur]+1u);
+        const size_t rstart(argp[wcur]);
+        for(size_t right=rstart; right<k; ++right) {
+            const size_t wt((index+(size_t)points[right]) & window);
+            if (bestp[wt] > vlocal) { bestp[wt]=vlocal; argp[wt]=(uint32_t)right; }
+        }
+        bestp[wcur]=spu;
+    }
+    (void)verbose;
+    return --index;
+}
+
 template<typename List, typename stype_t>
 inline bint _KRange(const List& points, const stype_t s,
                     const int verbose) {
     return _KRange(points,points.size(),s,verbose);
+}
+
+// ============================================
+// Bitset shift-OR Range: bits_{d+1} = bits_d | OR_a(bits_d << a).
+// Word-streaming, AVX2 4x64b when available. Wins for small s (s<=5):
+// O(s*k*N/64) sequential vs _KRange O(N*k) scattered. Loses for large s
+// where upper=s*back >> range (processes full upper each depth).
+// Falls back to _KRange when AVX2 unavailable or upper too large.
+template<typename List, typename stype_t>
+inline bint _BRange(const List& points, const size_t k, const stype_t s,
+                    const int verbose) {
+    assert( (k>=1) && (k<=points.size()) );
+    const bint back(points.back());
+    if (back == __St_One) return s;
+    // Guard: need upper=s*back+1 bits. Fallback for huge/negative.
+    if (back <= 0) return _KRange(points, k, s, verbose);
+    // Avoid overflow: use unsigned __int128 for upper check
+    {
+        unsigned __int128 ub = (unsigned __int128)(uint64_t)s
+                             * (unsigned __int128)(uint64_t)back + 1u;
+        // Cap at 256M bits (32MB per bitset x2 = 64MB); beyond that the
+        // streaming passes cost more than _KRange's early-exit scan.
+        if (ub > (unsigned __int128)(256u*1024u*1024u))
+            return _KRange(points, k, s, verbose);
+    }
+    const size_t uback((size_t)back);
+    const size_t us((size_t)s);
+    const size_t upper(us*uback+1u);
+    const size_t nwords((upper+63u)/64u);
+    const size_t nvec4((nwords+3u)/4u);
+    const size_t nwords4(nvec4*4u);
+    std::vector<uint64_t> cur(nwords4, 0u), nxt(nwords4, 0u);
+    cur[0] = 1ULL;
+    for(size_t j=0; j<k; ++j) {
+        const size_t v((size_t)points[j]);
+        if (v < upper) cur[v>>6] |= (1ULL<<(v&63u));
+    }
+    for(size_t d=1; d<us; ++d) {
+        // nxt = cur (streaming copy, then OR shifted versions)
+        uint64_t* __restrict__ cp(cur.data());
+        uint64_t* __restrict__ np(nxt.data());
+        std::copy(cp, cp+nwords4, np);
+        // Early depths are sparse: skip zero words (scalar, predictable).
+        // Later depths are dense: AVX2 streaming (no branches).
+        const bool sparse(d <= 2u);
+        for(size_t j=0; j<k; ++j) {
+            const size_t a((size_t)points[j]);
+            const size_t ws(a>>6);
+            if (ws >= nwords) continue;
+            const unsigned bs((unsigned)(a&63u));
+            if (bs == 0) {
+                size_t i(ws);
+                if (sparse) {
+                    for(; i<nwords; ++i) {
+                        const uint64_t c(cp[i-ws]);
+                        if (c) np[i] |= c;
+                    }
+                    continue;
+                }
+#ifdef __AVX2__
+                for(; i<nwords && (i&3u); ++i) np[i] |= cp[i-ws];
+                for(; i+4<=nwords; i+=4) {
+                    __m256i v = _mm256_loadu_si256((const __m256i*)(cp+i-ws));
+                    __m256i w = _mm256_loadu_si256((const __m256i*)(np+i));
+                    w = _mm256_or_si256(w, v);
+                    _mm256_storeu_si256((__m256i*)(np+i), w);
+                }
+#endif
+                for(; i<nwords; ++i) np[i] |= cp[i-ws];
+            } else {
+                if (ws < nwords) np[ws] |= (cp[0]<<bs);
+                const unsigned rbs(64u-bs);
+                size_t i(ws+1u);
+                if (sparse) {
+                    for(; i<nwords; ++i) {
+                        const uint64_t c0(cp[i-ws]), c1(cp[i-ws-1u]);
+                        if (c0 | c1) np[i] |= (c0<<bs) | (c1>>rbs);
+                    }
+                    continue;
+                }
+#ifdef __AVX2__
+                for(; i<nwords && (i&3u); ++i)
+                    np[i] |= (cp[i-ws]<<bs) | (cp[i-ws-1u]>>rbs);
+                for(; i+4<=nwords; i+=4) {
+                    __m256i v0 = _mm256_loadu_si256((const __m256i*)(cp+i-ws));
+                    __m256i v1 = _mm256_loadu_si256((const __m256i*)(cp+i-ws-1u));
+                    __m256i lo = _mm256_slli_epi64(v0, bs);
+                    __m256i hi = _mm256_srli_epi64(v1, rbs);
+                    __m256i sh = _mm256_or_si256(lo, hi);
+                    __m256i w = _mm256_loadu_si256((const __m256i*)(np+i));
+                    w = _mm256_or_si256(w, sh);
+                    _mm256_storeu_si256((__m256i*)(np+i), w);
+                }
+#endif
+                for(; i<nwords; ++i)
+                    np[i] |= (cp[i-ws]<<bs) | (cp[i-ws-1u]>>rbs);
+            }
+        }
+        cur.swap(nxt); // O(1) pointer swap; next iter re-derives cp/np
+    }
+    // Find first zero bit = range+1
+    const uint64_t* bits(cur.data());
+    for(size_t i=0; i<upper; ++i) {
+        if ( ((bits[i>>6] >> (i&63u)) & 1ULL) == 0ULL ) return (bint)i - 1;
+    }
+    (void)verbose;
+    return (bint)upper - 1;
+}
+
+template<typename List, typename stype_t>
+inline bint _BRange(const List& points, const stype_t s,
+                    const int verbose) {
+    return _BRange(points, points.size(), s, verbose);
+}
+
+// Prefix-aware dispatch (for FixedPoints prefix queries): _BRange for s<=5.
+template<typename List, typename stype_t>
+inline bint KDispatch(const List& points, const size_t k, const stype_t s,
+                      const int verbose) {
+    return (((size_t)s<=5u) ? _BRange(points, k, s, verbose)
+                            : _KRange(points, k, s, verbose));
 }
 
 
@@ -185,8 +356,11 @@ inline bint Range(const List& points, const stype_t s, const int verbose) {
         ScopePrint(std::clog << "#[Range] Basis: ", points) << std::endl;
 
     StTimer chrono; chrono.start();
-    const bint max( (s<6u) ?
-                    _SRange(points.begin(), points.end(), s, verbose) :
+    // Dispatch (measured on i7-12700K, Balanced k=40):
+    // s=2: B 5.6x over K, 2.9x over S; s=3: B 4.5x; s=4: B 2.4x;
+    // s=5: B 1.25x; s>=6: K wins (0.76x, 0.25x). _SRange kept for reference.
+    const bint max( ((size_t)s<=5u) ?
+                    _BRange(points, s, verbose) :
                     _KRange(points, s, verbose)
                     );
     chrono.stop();
