@@ -48,6 +48,7 @@ Daniel S. Roche
 | :--------- | :------ |
 |`bin/search`| Smallest basis reaching N with s stamps |
 |`bin/incremental`| Exact exhaustive search with incremental prefix reachability |
+|`bin/incremental_parallel`| Exact incremental search with bounded OpenMP prefix splitting |
 |`bin/complement`| Exhausts all additional denominations in parallel |
 |`bin/supplement`| Exhausts additional denominations several values at a time |
 |`bin/brute`| Exhaustive search of an extremal basis |
@@ -89,8 +90,18 @@ comparisons:
 
 ```
 bin/incremental #k #h [bound] [descending] [seed] [target-filter]
-                    [final-fast] [target-count]
+                    [final-fast] [target-count] [pair-filter]
 ```
+
+For exact parallel execution, use the separate tool:
+
+```text
+bin/incremental_parallel #k #h [threads] [split-depth]
+```
+
+The parallel tool uses bounded shallow prefix splitting and seeded exact
+subsearches. It is useful for larger searches, while `bin/incremental` remains
+the lower-overhead serial default.
 
 **Examples**:
 - `./bin/basis 4 2`: produces a basis of 4 denominations for 2 stamps (1 3 5 6, attaining all integers 1..12)
