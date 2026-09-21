@@ -246,14 +246,12 @@ inline bint _BRangeTiny(const List& points, const size_t k,
     uint64_t cur[8], nxt[8];
     for(size_t i=0; i<nwords; ++i) cur[i] = 0u;
     cur[0] = 1ULL;
+    // K2: fused bit-set + denomination decode (was two passes over k).
+    size_t wsA[256]; unsigned bsA[256]; unsigned rbA[256];
     for(size_t j=0; j<k; ++j) {
         const size_t v((size_t)points[j]);
         if (v < upper) cur[v>>6] |= (1ULL<<(v&63u));
-    }
-    // Hoisted decode (E3 for tiny included here).
-    size_t wsA[256]; unsigned bsA[256]; unsigned rbA[256];
-    for(size_t j=0; j<k; ++j) {
-        const size_t a((size_t)points[j]);
+        const size_t a(v);
         wsA[j] = (a>>6); bsA[j] = (unsigned)(a&63u); rbA[j] = 64u-bsA[j];
     }
     // K1: pointer-swapped buffers (copy-back loop was 7.6% profile).
