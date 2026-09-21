@@ -287,7 +287,9 @@ inline bint _BRange(const List& points, const size_t k, const stype_t s,
         std::copy(cp, cp+nwords4, np);
         // Early depths are sparse: skip zero words (scalar, predictable).
         // Later depths are dense: AVX2 streaming (no branches).
-        const bool sparse(d <= 2u);
+        // A5: tiny bitsets (nwords<=8, one AVX2 vector) go dense always:
+        // the sparse branch mispredicts dominate (L305 was 24% profile).
+        const bool sparse((d <= 2u) && (nwords > 8u));
         for(size_t j=0; j<k; ++j) {
             const size_t a((size_t)points[j]);
             const size_t ws(a>>6);
