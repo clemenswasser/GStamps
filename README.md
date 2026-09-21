@@ -84,14 +84,21 @@ Daniel S. Roche
 policy for the requested parameters. For h=4 this enables the completion
 bound, descending candidates, an approximate lower-bound seed, exact final
 target filtering, final-row evaluation, four consecutive target checks, and
-the exact two-final-denomination feasibility filter for k>=6.
+the exact two-final-denomination feasibility filter for k>=6. Validated h=4
+searches with k>=8 also use bounded OpenMP prefix splitting when more than one
+OpenMP thread is available. Set `OMP_NUM_THREADS=1` or use `serial` to force
+the lower-overhead serial execution.
 The optional numeric arguments remain available for ablation and reproducible
 comparisons:
 
 ```
 bin/incremental #k #h [bound] [descending] [seed] [target-filter]
-                    [final-fast] [target-count] [pair-filter]
+                     [final-fast] [target-count] [pair-filter]
 ```
+
+The validated automatic policy can be selected explicitly with `auto`, forced
+to serial execution with `serial`, or forced to bounded parallel execution with
+`parallel`. Numeric arguments retain the serial manual/ablation interface.
 
 For exact parallel execution, use the separate tool:
 
@@ -100,8 +107,9 @@ bin/incremental_parallel #k #h [threads] [split-depth]
 ```
 
 The parallel tool uses bounded shallow prefix splitting and seeded exact
-subsearches. It is useful for larger searches, while `bin/incremental` remains
-the lower-overhead serial default.
+subsearches. It exposes explicit thread and split-depth controls; the regular
+`bin/incremental` command uses the same runner automatically for validated
+large h=4 searches.
 
 **Examples**:
 - `./bin/basis 4 2`: produces a basis of 4 denominations for 2 stamps (1 3 5 6, attaining all integers 1..12)

@@ -48,6 +48,9 @@ VPATH = src:benchmarks
 bin/%: %.cpp
 	$(LINK.cpp) $^ $(LOADLIBES) $(LDLIBS) -o $@
 
+bin/incremental_parallel: src/incremental_parallel.cpp src/incremental.cpp
+	$(LINK.cpp) $< $(LOADLIBES) $(LDLIBS) -o $@
+
 clean:
 	- \rm ${BIN}
 

@@ -5,10 +5,12 @@
 #include <gstamps.h>
 #include <chrono>
 #include <iostream>
+#include <omp.h>
 #include <string>
 
 struct IncrementalOptions {
     bool automatic = false;
+    bool parallel = false;
     bool bound = false;
     bool descending = false;
     bool seed = false;
@@ -17,6 +19,8 @@ struct IncrementalOptions {
     bool final_fast = false;
     size_t target_count = 1;
     bool pair_filter = false;
+    int parallel_threads = 1;
+    size_t parallel_split_depth = 2;
 };
 
 inline IncrementalOptions IncrementalAutomaticOptions(const size_t k,
@@ -31,6 +35,8 @@ inline IncrementalOptions IncrementalAutomaticOptions(const size_t k,
     options.final_fast = (k >= 4u);
     options.target_count = (h == 4u) ? 4u : 1u;
     options.pair_filter = (h == 4u && k >= 6u);
+    options.parallel = (h == 4u && k >= 8u && omp_get_max_threads() > 1);
+    options.parallel_threads = omp_get_max_threads();
     return options;
 }
 
@@ -323,21 +329,114 @@ struct IncrementalSearch {
     }
 };
 
+struct IncrementalTask {
+    std::vector<bint> basis;
+    IncrementalState state;
+};
+
+struct IncrementalParallelResult {
+    bint best = 0;
+    std::vector<bint> best_basis;
+    unsigned long long states = 0;
+    unsigned long long target_skips = 0;
+    size_t tasks = 0;
+};
+
+inline void IncrementalGenerateTasks(IncrementalSearch& search,
+                                     const size_t depth,
+                                     const size_t split_depth,
+                                     std::vector<bint>& basis,
+                                     std::vector<IncrementalTask>& tasks) {
+    if (depth == split_depth || basis.size() == search.k) {
+        tasks.push_back({basis, search.stack[depth]});
+        return;
+    }
+    const IncrementalState& state(search.stack[depth]);
+    const size_t low((size_t)basis.back()+1u);
+    const size_t high((size_t)state.range+1u);
+    for (size_t a=low; a<=high; ++a) {
+        basis.push_back(bint(a));
+        IncrementalExtend(state, a, search.stack[depth+1u]);
+        IncrementalGenerateTasks(search, depth+1u, split_depth, basis, tasks);
+        basis.pop_back();
+    }
+}
+
+inline IncrementalParallelResult IncrementalRunParallel(
+    const size_t k, const size_t h, const IncrementalOptions& options) {
+    IncrementalSearch seed{k,h,options.bound,options.descending,
+                           options.target_filter,options.final_fast,
+                           options.target_count,options.automatic,
+                           options.pair_filter};
+    seed.stack.resize(k);
+    seed.stack[0] = IncrementalInitial(h);
+    std::vector<bint> seed_basis;
+    if (options.seed) {
+        seed.best = FSelect(seed_basis, k, h, 0, options.seed_approx, 0);
+        seed.best_basis = seed_basis;
+    }
+
+    std::vector<bint> basis{1};
+    const size_t max_split_depth(k > 0u ? k-1u : 0u);
+    const size_t split_depth(std::min(options.parallel_split_depth,
+                                      max_split_depth));
+    std::vector<IncrementalTask> tasks;
+    IncrementalGenerateTasks(seed, 0, split_depth, basis, tasks);
+
+    IncrementalParallelResult result;
+    result.best = seed.best;
+    result.best_basis = seed.best_basis;
+    result.tasks = tasks.size();
+    const int threads(std::max(1, options.parallel_threads));
+#pragma omp parallel for schedule(dynamic,1) num_threads(threads)
+    for (size_t ti=0; ti<tasks.size(); ++ti) {
+        IncrementalSearch local{k,h,options.bound,options.descending,
+                               options.target_filter,options.final_fast,
+                               options.target_count,options.automatic,
+                               options.pair_filter};
+        local.best=seed.best;
+        local.best_basis=seed.best_basis;
+        local.stack.resize(k);
+        const size_t depth(tasks[ti].basis.size()-1u);
+        local.stack[depth]=tasks[ti].state;
+        std::vector<bint> local_basis(tasks[ti].basis);
+        local.visit(depth,local_basis);
+#pragma omp critical
+        {
+            result.states += local.states;
+            result.target_skips += local.target_skips;
+            if (local.best>result.best) {
+                result.best=local.best;
+                result.best_basis=local.best_basis;
+            }
+        }
+    }
+    return result;
+}
+
 int main(int argc, char** argv) {
     if (argc <= 2) {
         std::cerr << "usage: " << argv[0]
-                  << " #k #h [auto|bound] [descending] [seed]"
+                  << " #k #h [auto|serial|parallel|bound] [descending] [seed]"
                   << " [target-filter] [final-fast] [target-count].\n"
-                  << "without optional arguments, automatic exact settings are used.\n";
+                  << "without optional arguments, automatic exact settings are used.\n"
+                  << "automatic mode parallelizes validated h=4,k>=8 searches;"
+                  << " use serial to disable it.\n";
         return 1;
     }
     const size_t k(std::stoul(argv[1]));
     const size_t h(std::stoul(argv[2]));
     IncrementalOptions options;
-    if (argc <= 3 || std::string(argv[3]) == "auto") {
+    const std::string mode(argc>3 ? argv[3] : "auto");
+    if (mode == "auto") {
         options = IncrementalAutomaticOptions(k, h);
+    } else if (mode == "serial" || mode == "parallel") {
+        options = IncrementalAutomaticOptions(k, h);
+        options.parallel = mode == "parallel";
+        options.automatic = true;
     } else {
         options.automatic = false;
+        options.parallel = false;
         options.bound = std::stoi(argv[3]) != 0;
         options.descending = argc>4 ? std::stoi(argv[4])!=0 : false;
         options.seed = argc>5 ? std::stoi(argv[5])!=0 : false;
@@ -347,30 +446,49 @@ int main(int argc, char** argv) {
     }
     const bool pair_filter(argc>9 ? std::stoi(argv[9])!=0 : false);
 
-    IncrementalSearch search{k,h,options.bound,options.descending,
-                             options.target_filter,options.final_fast,
-                             options.target_count,options.automatic,
-                             options.pair_filter || pair_filter};
-    search.stack.resize(k);
-    search.stack[0] = IncrementalInitial(h);
-    std::vector<bint> basis{1};
-    if (options.seed) {
-        std::vector<bint> seed_basis;
-        search.best = FSelect(seed_basis, k, h, 0, options.seed_approx, 0);
-        search.best_basis = seed_basis;
-    }
     const auto start(std::chrono::steady_clock::now());
-    search.visit(0, basis);
-    const auto stop(std::chrono::steady_clock::now());
+    if (options.parallel) {
+        const IncrementalParallelResult result(
+            IncrementalRunParallel(k, h, options));
+        const auto stop(std::chrono::steady_clock::now());
+        std::cout << "#[Incremental] range: " << result.best
+                  << " policy: "
+                  << (options.automatic ? "auto-parallel" : "parallel")
+                  << " tasks: " << result.tasks
+                  << " threads: " << std::max(1, options.parallel_threads)
+                  << " states: " << result.states
+                  << " target-skips: " << result.target_skips
+                  << " seconds: "
+                  << std::chrono::duration<double>(stop-start).count()
+                  << " basis: ";
+        for (const auto& value : result.best_basis) std::cout << value << ' ';
+        std::cout << '\n';
+    } else {
+        IncrementalSearch search{k,h,options.bound,options.descending,
+                                 options.target_filter,options.final_fast,
+                                 options.target_count,options.automatic,
+                                 options.pair_filter || pair_filter};
+        search.stack.resize(k);
+        search.stack[0] = IncrementalInitial(h);
+        std::vector<bint> basis{1};
+        if (options.seed) {
+            std::vector<bint> seed_basis;
+            search.best = FSelect(seed_basis, k, h, 0, options.seed_approx, 0);
+            search.best_basis = seed_basis;
+        }
+        search.visit(0, basis);
+        const auto stop(std::chrono::steady_clock::now());
 
-    std::cout << "#[Incremental] range: " << search.best
-              << " policy: " << (options.automatic ? "auto" : "manual")
-              << " states: " << search.states
-              << " target-skips: " << search.target_skips
-              << " seconds: "
-              << std::chrono::duration<double>(stop-start).count()
-              << " basis: ";
-    for (const auto& value : search.best_basis) std::cout << value << ' ';
-    std::cout << '\n';
+        std::cout << "#[Incremental] range: " << search.best
+                  << " policy: "
+                  << (options.automatic ? "auto-serial" : "manual")
+                  << " states: " << search.states
+                  << " target-skips: " << search.target_skips
+                  << " seconds: "
+                  << std::chrono::duration<double>(stop-start).count()
+                  << " basis: ";
+        for (const auto& value : search.best_basis) std::cout << value << ' ';
+        std::cout << '\n';
+    }
     return 0;
 }
