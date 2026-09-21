@@ -165,17 +165,46 @@ inline bool IncrementalCanReachTargetWithLast(const IncrementalState& prefix,
     return false;
 }
 
+inline bint IncrementalFinalRange(const IncrementalState& prefix,
+                                  const size_t a,
+                                  std::vector<uint64_t>& scratch) {
+    const size_t words((prefix.h*a+64u)/64u);
+    scratch.assign(words, 0u);
+    const size_t copy_words(std::min(prefix.words, words));
+    std::copy(prefix.bits.begin()+prefix.h*prefix.words,
+              prefix.bits.begin()+prefix.h*prefix.words+copy_words,
+              scratch.begin());
+    for (size_t copies=1; copies<=prefix.h; ++copies) {
+        const size_t shift(copies*a);
+        const size_t word_shift(shift>>6);
+        const unsigned bit_shift((unsigned)(shift&63u));
+        const unsigned reverse_shift(64u-bit_shift);
+        const uint64_t* source(prefix.bits.data()+(prefix.h-copies)*prefix.words);
+        for (size_t i=word_shift; i<words; ++i) {
+            if (i-word_shift>=prefix.words) break;
+            uint64_t shifted(source[i-word_shift]<<bit_shift);
+            if (bit_shift && i>word_shift && i-word_shift-1u<prefix.words)
+                shifted |= source[i-word_shift-1u]>>reverse_shift;
+            scratch[i] |= shifted;
+        }
+    }
+    return IncrementalFirstZeroFrom(scratch.data(), prefix.h*a+1u,
+                                    (size_t)prefix.range+1u)-1;
+}
+
 struct IncrementalSearch {
     size_t k;
     size_t h;
     bool bound;
     bool descending;
     bool target_filter;
+    bool final_fast;
     bint best = 0;
     std::vector<bint> best_basis;
     unsigned long long states = 0;
     unsigned long long target_skips = 0;
     std::vector<IncrementalState> stack;
+    std::vector<uint64_t> final_scratch;
 
     void visit(const size_t depth, std::vector<bint>& basis) {
         ++states;
@@ -204,6 +233,16 @@ struct IncrementalSearch {
                 return;
             }
             basis.push_back(bint(a));
+            if (final_fast && basis.size()==k) {
+                const bint candidate_range(IncrementalFinalRange(
+                    state, a, final_scratch));
+                if (candidate_range > best) {
+                    best = candidate_range;
+                    best_basis = basis;
+                }
+                basis.pop_back();
+                return;
+            }
             const size_t required((h+1u)*((h*a+64u)/64u));
             if (stack[depth+1u].bits.capacity() < required)
                 stack[depth+1u].bits.reserve(required);
@@ -227,7 +266,7 @@ struct IncrementalSearch {
 int main(int argc, char** argv) {
     if (argc <= 2) {
         std::cerr << "usage: " << argv[0]
-                  << " #k #h [bound] [descending] [seed] [target-filter].\n";
+                  << " #k #h [bound] [descending] [seed] [target-filter] [final-fast].\n";
         return 1;
     }
     const size_t k(std::stoul(argv[1]));
@@ -236,8 +275,9 @@ int main(int argc, char** argv) {
     const bool descending(argc>4 ? std::stoi(argv[4])!=0 : false);
     const bool seed(argc>5 ? std::stoi(argv[5])!=0 : false);
     const bool target_filter(argc>6 ? std::stoi(argv[6])!=0 : false);
+    const bool final_fast(argc>7 ? std::stoi(argv[7])!=0 : false);
 
-    IncrementalSearch search{k,h,bound,descending,target_filter};
+    IncrementalSearch search{k,h,bound,descending,target_filter,final_fast};
     search.stack.resize(k);
     search.stack[0] = IncrementalInitial(h);
     std::vector<bint> basis{1};
