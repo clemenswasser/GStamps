@@ -236,6 +236,79 @@ inline bint _KRange(const List& points, const stype_t s,
 // Falls back to _KRange when AVX2 unavailable or upper too large.
 template<typename List, typename stype_t>
 inline bint _BRange(const List& points, const size_t k, const stype_t s,
+                    const int verbose); // fwd for tiny fallback
+// E2: dedicated tiny path (nwords<=8, k<=256): fused copy+first shift,
+// hoisted decode, dense scalar fully unrolled. Generic path keeps AVX2.
+template<typename List>
+inline bint _BRangeTiny(const List& points, const size_t k,
+                        const size_t us, const size_t upper,
+                        const size_t nwords) {
+    uint64_t cur[8], nxt[8];
+    for(size_t i=0; i<nwords; ++i) cur[i] = 0u;
+    cur[0] = 1ULL;
+    for(size_t j=0; j<k; ++j) {
+        const size_t v((size_t)points[j]);
+        if (v < upper) cur[v>>6] |= (1ULL<<(v&63u));
+    }
+    // Hoisted decode (E3 for tiny included here).
+    size_t wsA[256]; unsigned bsA[256]; unsigned rbA[256];
+    for(size_t j=0; j<k; ++j) {
+        const size_t a((size_t)points[j]);
+        wsA[j] = (a>>6); bsA[j] = (unsigned)(a&63u); rbA[j] = 64u-bsA[j];
+    }
+    for(size_t d=1; d<us; ++d) {
+        // Fused copy + first denomination (E1 for tiny included here).
+        {
+            const size_t ws(wsA[0]); const unsigned bs(bsA[0]);
+            if (bs == 0) {
+#pragma GCC unroll 8
+                for(size_t i=0; i<nwords; ++i)
+                    nxt[i] = cur[i] | (i>=ws ? cur[i-ws] : 0u);
+            } else {
+                const unsigned rb(rbA[0]);
+#pragma GCC unroll 8
+                for(size_t i=0; i<nwords; ++i) {
+                    uint64_t sh(0u);
+                    if (i>=ws) {
+                        sh = cur[i-ws]<<bs;
+                        if (i>ws) sh |= (cur[i-ws-1u]>>rb);
+                        else if (ws==0) { /* i==ws>0? no-op */ }
+                    }
+                    // i==ws term cp[0]<<bs needs i-ws==0 -> covered (cur[0]<<bs, no carry since i==ws)
+                    nxt[i] = cur[i] | sh;
+                }
+            }
+        }
+        for(size_t j=1; j<k; ++j) {
+            const size_t ws(wsA[j]); const unsigned bs(bsA[j]);
+            if (ws >= nwords) continue;
+            if (bs == 0) {
+#pragma GCC unroll 8
+                for(size_t i=ws; i<nwords; ++i) nxt[i] |= cur[i-ws];
+            } else {
+                const unsigned rb(rbA[j]);
+                if (ws < nwords) nxt[ws] |= (cur[0]<<bs);
+#pragma GCC unroll 8
+                for(size_t i=ws+1u; i<nwords; ++i)
+                    nxt[i] |= (cur[i-ws]<<bs) | (cur[i-ws-1u]>>rb);
+            }
+        }
+        for(size_t i=0; i<nwords; ++i) cur[i] = nxt[i];
+    }
+    const size_t full(upper>>6);
+    for(size_t w=0; w<full; ++w) {
+        const uint64_t inv(~cur[w]);
+        if (inv) return (bint)(w*64u + __builtin_ctzll(inv)) - 1;
+    }
+    const unsigned rem((unsigned)(upper&63u));
+    if (rem) {
+        const uint64_t inv(~(cur[full] | (~0ULL << rem)));
+        if (inv) return (bint)(full*64u + __builtin_ctzll(inv)) - 1;
+    }
+    return (bint)upper - 1;
+}
+template<typename List, typename stype_t>
+inline bint _BRange(const List& points, const size_t k, const stype_t s,
                     const int verbose) {
     assert( (k>=1) && (k<=points.size()) );
     const bint back(points.back());
@@ -259,6 +332,9 @@ inline bint _BRange(const List& points, const size_t k, const stype_t s,
     const size_t us((size_t)s);
     const size_t upper(us*uback+1u);
     const size_t nwords((upper+63u)/64u);
+    // E2: tiny fast path (brute prefixes live here).
+    if ((nwords <= 8u) && (k <= 256u))
+        return _BRangeTiny(points, k, us, upper, nwords);
     const size_t nvec4((nwords+3u)/4u);
     const size_t nwords4(nvec4*4u);
     // A1: SBO -- brute prefixes are tiny (upper~200 bits = 4 words);
