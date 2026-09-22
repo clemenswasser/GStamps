@@ -207,9 +207,10 @@ inline IncrementalParallelResult IncrementalTbbReduce(
 
 // ---------------------------------------------------------------------------
 // Mode 2: recursive task_group (task_examples.cpp / sudoku pattern).
-// Single depth knob instead of the feeder triple (max_depth/score/budget):
-// split while depth < max_depth && remaining > 1 && width > 1, serial leaf
-// below. No materialized task vector, no feeder queue.
+// Adaptive stop rule: split while the estimated subtree cost
+// (width^remaining, same score as the feeder) reaches split_score, bounded
+// by max_depth. Big subtrees split deep, tiny ones run serially — no manual
+// depth tuning per k, no straggler leaves.
 // ---------------------------------------------------------------------------
 struct IncrementalTgContext {
     size_t k;
@@ -220,6 +221,7 @@ struct IncrementalTgContext {
     std::atomic<bint>* global_best;
     bint upper_bound;
     size_t max_depth;
+    size_t split_score;
     oneapi::tbb::task_group* tg;
     oneapi::tbb::enumerable_thread_specific<IncrementalTbbLocalResult>& workers;
 
@@ -228,7 +230,7 @@ struct IncrementalTgContext {
             global_best->load(std::memory_order_relaxed) : seed_best;
     }
 
-    void visit_recursive(IncrementalTask task) {
+    void visit_recursive(const IncrementalTask& task) {
         if (oneapi::tbb::is_current_task_group_canceling()) return;
         const size_t depth(task.basis.size()-1u);
         const size_t remaining(k-task.basis.size());
@@ -240,7 +242,13 @@ struct IncrementalTgContext {
             return;
         }
         const size_t width(IncrementalTbbCandidateWidth(task));
-        if (depth < max_depth && remaining > 1u && width > 1u) {
+        // Adaptive: split big estimated subtrees deeper, run small ones.
+        // split_score=0 keeps the old always-split-to-max-depth behavior.
+        const bool big_enough =
+            (split_score == 0u) ||
+            (IncrementalTbbSplitScore(width, remaining) >= split_score);
+        if (depth < max_depth && remaining > 1u && width > 1u &&
+            big_enough) {
             const size_t low((size_t)task.basis.back()+1u);
             const size_t high((size_t)task.state.range+1u);
             // Descending spawn: large-a children (larger subtrees) first (LPT).
@@ -268,10 +276,10 @@ struct IncrementalTgContext {
                 }
                 if (keep) {
                     // sudoku pattern: subproblem copied into the group.
-                    // (const lambda body: copy locally, then move.)
+                    // Parent is borrowed (const ref); each child owns its
+                    // copy — one copy per spawn, no per-visit copies.
                     tg->run([this, child]() {
-                        IncrementalTask c(child);
-                        visit_recursive(std::move(c));
+                        visit_recursive(child);
                     });
                 }
                 if (a==low) break;
@@ -449,7 +457,7 @@ struct IncrementalPqContext {
 
 inline IncrementalParallelResult IncrementalRunTaskGroup(
     const size_t k, const size_t h, const IncrementalOptions& options,
-    const int threads, const size_t max_depth) {
+    const int threads, const size_t max_depth, const size_t split_score) {
     IncrementalSearch seed{k,h,options.bound,options.descending,
                            options.target_filter,options.final_fast,
                            options.target_count,options.automatic,
@@ -485,12 +493,11 @@ inline IncrementalParallelResult IncrementalRunTaskGroup(
     oneapi::tbb::task_group tg;
     IncrementalTgContext context{k,h,options,seed.best,seed_basis,
                                  &global_best,upper_bound,
-                                 bounded_depth,&tg,workers};
+                                 bounded_depth,split_score,&tg,workers};
     arena.execute([&]{
         for (auto& t : initial) {
             tg.run([&context, task=t]() {
-                IncrementalTask c(task);
-                context.visit_recursive(std::move(c));
+                context.visit_recursive(task);
             });
         }
         tg.wait();
@@ -558,7 +565,9 @@ int main(int argc, char** argv) {
     if (argc <= 2) {
         std::cerr << "usage: " << argv[0]
                   << " #k #h [threads] [max-depth] [split-budget|max-spawn]"
-                  << " [feeder|taskgroup|pq].\n";
+                  << " [feeder|taskgroup|pq] [split-score].\n"
+                  << "split-score (taskgroup only): split while "
+                  << "width^remaining >= score; 0 = always split to max-depth.\n";
         return 1;
     }
     const size_t k(std::stoul(argv[1]));
@@ -578,6 +587,11 @@ int main(int argc, char** argv) {
                          size_t(std::max(1, threads))*32u);
     const size_t split_budget(argc>5 ? std::stoul(argv[5]) :
                                       split_budget_default);
+    // Taskgroup stop rule is the score; 0 preserves old always-split.
+    // Default tuned at 9/4 (see worklist); max-depth stays a safety cap.
+    const size_t split_score_default(1u<<16);
+    const size_t split_score(argc>7 ? std::stoul(argv[7]) :
+                                      split_score_default);
 
     IncrementalOptions options=IncrementalAutomaticOptions(k, h);
     options.automatic=false;
@@ -585,7 +599,8 @@ int main(int argc, char** argv) {
     const auto start(std::chrono::steady_clock::now());
     IncrementalParallelResult result;
     if (method == "taskgroup")
-        result = IncrementalRunTaskGroup(k,h,options,threads,max_depth);
+        result = IncrementalRunTaskGroup(k,h,options,threads,max_depth,
+                                         split_score);
     else if (method == "pq")
         result = IncrementalRunPq(k,h,options,threads,max_depth,split_budget);
     else
@@ -597,6 +612,7 @@ int main(int argc, char** argv) {
               << " max-depth: " << max_depth
               << " split-budget: " << split_budget
               << " method: " << method
+              << " split-score: " << split_score
               << " states: " << result.states
               << " target-skips: " << result.target_skips
               << " seconds: "
