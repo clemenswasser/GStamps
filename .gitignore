@@ -32,6 +32,11 @@
 *.app
 bin/*
 
+# PGO profile data
+.pgo-data/
+*.gcda
+*.gcno
+
 # Backup sources
 *~
 

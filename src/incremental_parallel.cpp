@@ -13,7 +13,10 @@ int main(int argc, char** argv) {
     const size_t k(std::stoul(argv[1]));
     const size_t h(std::stoul(argv[2]));
     const int threads(argc>3 ? std::stoi(argv[3]) : 8);
-    const size_t split_depth(argc>4 ? std::stoul(argv[4]) : 2u);
+    // Fastest measured default (matches auto policy): split4 above 8
+    // threads, split3 at/below (9/4: split3 wins at 8t, split4 at 12+t).
+    const size_t split_depth(argc>4 ? std::stoul(argv[4]) :
+                                     (threads > 8 ? 4u : 3u));
 
     IncrementalOptions options=IncrementalAutomaticOptions(k, h);
     options.automatic = false;

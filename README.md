@@ -49,6 +49,7 @@ Daniel S. Roche
 |`bin/search`| Smallest basis reaching N with s stamps |
 |`bin/incremental`| Exact exhaustive search with incremental prefix reachability |
 |`bin/incremental_parallel`| Exact incremental search with bounded OpenMP prefix splitting |
+|`bin/incremental_tbb`| Optional exact incremental search with dynamic oneTBB frontier |
 |`bin/complement`| Exhausts all additional denominations in parallel |
 |`bin/supplement`| Exhausts additional denominations several values at a time |
 |`bin/brute`| Exhaustive search of an extremal basis |
@@ -110,6 +111,15 @@ The parallel tool uses bounded shallow prefix splitting and seeded exact
 subsearches. It exposes explicit thread and split-depth controls; the regular
 `bin/incremental` command uses the same runner automatically for validated
 large h=4 searches.
+
+If oneTBB development headers and libraries are installed, `make tbb` builds
+`bin/incremental_tbb`. It uses a dynamic `parallel_for_each` feeder so active
+subtrees can add finer-grained work instead of materializing one fixed
+frontier. Its optional arguments are the thread count and maximum split depth:
+
+```text
+bin/incremental_tbb #k #h [threads] [split-depth]
+```
 
 **Examples**:
 - `./bin/basis 4 2`: produces a basis of 4 denominations for 2 stamps (1 3 5 6, attaining all integers 1..12)
