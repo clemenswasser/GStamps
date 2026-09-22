@@ -26,7 +26,6 @@ PRG += dynprg supplement complement
 PRG += brute
 PRG += search
 PRG += incremental
-PRG += incremental_parallel
 
 BEN  = fibo alba geom bala
 BEN += krange reach srange
@@ -51,6 +50,23 @@ bin/%: %.cpp
 bin/incremental_parallel: src/incremental_parallel.cpp src/incremental.cpp
 	$(LINK.cpp) $< $(LOADLIBES) $(LDLIBS) -o $@
 
+# S18: bin/incremental itself builds profile-guided (fastest measured exact
+# solver, ~-20%). Training is k=8 serial by default (same hot code as 9/4;
+# override with PGO_TRAIN_ARGS="9 4 serial" for the last ~3%).
+# Set INCREMENTAL_PGO=0 for a plain -O3 build while iterating on kernels.
+PGODIR = ./.pgo-data
+PGO_TRAIN_ARGS ?= 8 4 serial
+ifeq ($(INCREMENTAL_PGO),0)
+bin/incremental: src/incremental.cpp
+	$(LINK.cpp) $^ $(LOADLIBES) $(LDLIBS) -o $@
+else
+bin/incremental: src/incremental.cpp
+	mkdir -p ${PGODIR}
+	$(LINK.cpp) -fprofile-generate=${PGODIR} $^ $(LOADLIBES) $(LDLIBS) -o $@
+	./$@ ${PGO_TRAIN_ARGS}
+	$(LINK.cpp) -fprofile-use=${PGODIR} $^ $(LOADLIBES) $(LDLIBS) -o $@
+endif
+
 TBB_CXXFLAGS ?= $(shell pkg-config --cflags tbb 2>/dev/null)
 TBB_LIBS ?= $(shell pkg-config --libs tbb 2>/dev/null)
 
@@ -59,24 +75,8 @@ tbb: bin/incremental_tbb
 bin/incremental_tbb: src/incremental_tbb.cpp src/incremental.cpp
 	$(LINK.cpp) $(TBB_CXXFLAGS) $< $(LOADLIBES) $(TBB_LIBS) $(LDLIBS) -o $@
 
-# S18: profile-guided build of the exact solver. Trains on a fast
-# representative workload (k=8 serial covers the same hot
-# predicate/FinalRange code as 9/4); override training with e.g.
-# `make pgo PGO_TRAIN_ARGS="9 4 serial"` for the last ~3%.
-PGODIR = ./.pgo-data
-PGO_TRAIN_ARGS ?= 8 4 serial
-
-pgo: bin/incremental_pgo
-
-bin/incremental_pgo: src/incremental.cpp
-	mkdir -p ${PGODIR}
-	$(CXX) ${OPTFLAGS} -fprofile-generate=${PGODIR} -I`pwd`/include/ `pkg-config givaro --cflags` $< `pkg-config givaro --libs` -o $@
-	./$@ ${PGO_TRAIN_ARGS}
-	$(CXX) ${OPTFLAGS} -fprofile-use=${PGODIR} -I`pwd`/include/ `pkg-config givaro --cflags` $< `pkg-config givaro --libs` -o $@
-
 clean:
 	- \rm ${BIN}
-	- \rm bin/incremental_pgo bin/incremental_census bin/incremental_fuzz
 	- \rm -rf ${PGODIR}
 
 range: FDTC.sh ${BIN}

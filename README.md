@@ -47,8 +47,8 @@ Daniel S. Roche
 |  |  |
 | :--------- | :------ |
 |`bin/search`| Smallest basis reaching N with s stamps |
-|`bin/incremental`| Exact exhaustive search with incremental prefix reachability |
-|`bin/incremental_parallel`| Exact incremental search with bounded OpenMP prefix splitting |
+|`bin/incremental`| Exact exhaustive search with incremental prefix reachability (profile-guided build, fastest exact solver) |
+|`bin/incremental_parallel`|ablation lab: exact incremental search with explicit thread/split-depth controls (`make bin/incremental_parallel`) |
 |`bin/incremental_tbb`| Optional exact incremental search with dynamic oneTBB frontier |
 |`bin/complement`| Exhausts all additional denominations in parallel |
 |`bin/supplement`| Exhausts additional denominations several values at a time |
@@ -101,7 +101,8 @@ The validated automatic policy can be selected explicitly with `auto`, forced
 to serial execution with `serial`, or forced to bounded parallel execution with
 `parallel`. Numeric arguments retain the serial manual/ablation interface.
 
-For exact parallel execution, use the separate tool:
+For exact parallel execution with explicit controls, build the separate
+ablation lab tool (`make bin/incremental_parallel`):
 
 ```text
 bin/incremental_parallel #k #h [threads] [split-depth]
